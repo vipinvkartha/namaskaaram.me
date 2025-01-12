@@ -10,6 +10,7 @@ import { SkillsEditor } from './editors/SkillsEditor';
 import { ExperienceEditor } from './editors/ExperienceEditor';
 import { AboutEditor } from './editors/AboutEditor';
 import { PreviewModal } from './PreviewModal';
+import { storageService } from '../services/storage';
 
 interface Section {
   id: string;
@@ -34,7 +35,7 @@ interface BuilderState {
 }
 
 export const TemplateBuilder: React.FC = () => {
-  const { isAuthenticated, isLoading } = useAuth0();
+  const { isAuthenticated, isLoading, user } = useAuth0();
   const location = useLocation();
   const navigate = useNavigate();
   const initialTemplate = location.state?.template;
@@ -49,36 +50,6 @@ export const TemplateBuilder: React.FC = () => {
       socialLinks: []
     }
   });
-
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      navigate('/');
-    }
-  }, [isAuthenticated, isLoading, navigate]);
-
-  useEffect(() => {
-    if (initialTemplate) {
-      // Convert template data to builder state
-      setBuilderState({
-        theme: colorThemes[0], // Set appropriate theme based on template
-        sections: [
-          {
-            id: 'about',
-            type: 'about',
-            content: initialTemplate.data.bio
-          },
-          // Add other sections based on template data
-        ],
-        personalInfo: {
-          name: initialTemplate.data.name,
-          title: initialTemplate.data.title,
-          email: ''
-        }
-      });
-    }
-  }, [initialTemplate]);
-
-  const [activeSection, setActiveSection] = useState<string | null>(null);
 
   const [sections, setSections] = useState([
     {
@@ -98,12 +69,82 @@ export const TemplateBuilder: React.FC = () => {
       type: 'skills',
       content: [],
       isVisible: true
-    },
-    // Add more sections as needed
+    }
   ]);
 
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Load saved state when component mounts
+  useEffect(() => {
+    if (isAuthenticated && user?.sub) {
+      const savedState = storageService.loadState(user.sub);
+      if (savedState) {
+        setBuilderState(savedState.builderState);
+        setSections(savedState.sections);
+      } else if (initialTemplate) {
+        // If no saved state but has initial template
+        setBuilderState({
+          theme: colorThemes[0],
+          sections: [],
+          personalInfo: {
+            name: initialTemplate.data.name,
+            title: initialTemplate.data.title,
+            email: '',
+            socialLinks: []
+          }
+        });
+        setSections([
+          {
+            id: 'about',
+            type: 'about',
+            content: initialTemplate.data.bio,
+            isVisible: true
+          },
+          // ... other sections
+        ]);
+      }
+    }
+  }, [isAuthenticated, user?.sub, initialTemplate]);
+
+  // Save state whenever it changes
+  useEffect(() => {
+    if (isAuthenticated && user?.sub) {
+      setIsSaving(true);
+      const saveTimeout = setTimeout(() => {
+        storageService.saveState(user.sub, builderState, sections);
+        setIsSaving(false);
+      }, 500); // Debounce saves
+
+      return () => clearTimeout(saveTimeout);
+    }
+  }, [isAuthenticated, user?.sub, builderState, sections]);
+
+  // Clear saved state on logout
+  useEffect(() => {
+    if (!isAuthenticated && !isLoading) {
+      storageService.clearState();
+    }
+  }, [isAuthenticated, isLoading]);
+
+  // Wrap state setters to ensure they trigger the save effect
+  const updateBuilderState = (newState: BuilderState) => {
+    setBuilderState(newState);
+  };
+
+  const updateSections = (newSections: Section[]) => {
+    setSections(newSections);
+  };
+
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      navigate('/');
+    }
+  }, [isAuthenticated, isLoading, navigate]);
+
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+
   const handleAddSocialLink = () => {
-    setBuilderState({
+    updateBuilderState({
       ...builderState,
       personalInfo: {
         ...builderState.personalInfo,
@@ -138,7 +179,7 @@ export const TemplateBuilder: React.FC = () => {
   const handleRemoveSocialLink = (index: number) => {
     const newSocialLinks = [...builderState.personalInfo.socialLinks];
     newSocialLinks.splice(index, 1);
-    setBuilderState({
+    updateBuilderState({
       ...builderState,
       personalInfo: {
         ...builderState.personalInfo,
@@ -161,7 +202,7 @@ export const TemplateBuilder: React.FC = () => {
           <SkillsEditor
             skills={section.content || []}
             onUpdate={(newContent) => {
-              setSections(sections.map(s =>
+              updateSections(sections.map(s =>
                 s.id === activeSection ? { ...s, content: newContent } : s
               ));
             }}
@@ -172,7 +213,7 @@ export const TemplateBuilder: React.FC = () => {
           <ExperienceEditor
             experiences={section.content || []}
             onUpdate={(newContent) => {
-              setSections(sections.map(s =>
+              updateSections(sections.map(s =>
                 s.id === activeSection ? { ...s, content: newContent } : s
               ));
             }}
@@ -183,7 +224,7 @@ export const TemplateBuilder: React.FC = () => {
           <AboutEditor
             content={section.content || ''}
             onUpdate={(newContent) => {
-              setSections(sections.map(s =>
+              updateSections(sections.map(s =>
                 s.id === activeSection ? { ...s, content: newContent } : s
               ));
             }}
@@ -201,6 +242,18 @@ export const TemplateBuilder: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr]">
         {/* Editor Panel */}
         <div className="bg-white border-r border-gray-200 p-6 h-screen overflow-y-auto sticky top-0">
+          <div className="absolute top-4 right-4">
+            {isSaving && (
+              <span className="text-sm text-gray-500 flex items-center gap-2">
+                <svg className="animate-spin h-4 w-4 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Saving...
+              </span>
+            )}
+          </div>
+
           <div className="space-y-8">
             {/* Preview Button */}
             <div className="flex justify-end">
@@ -220,7 +273,7 @@ export const TemplateBuilder: React.FC = () => {
                 {colorThemes.map((theme) => (
                   <button
                     key={theme.id}
-                    onClick={() => setBuilderState({ ...builderState, theme })}
+                    onClick={() => updateBuilderState({ ...builderState, theme })}
                     className={`p-3 rounded-lg border-2 transition-all ${
                       builderState.theme.id === theme.id
                         ? 'border-blue-500 ring-2 ring-blue-200'
@@ -240,7 +293,7 @@ export const TemplateBuilder: React.FC = () => {
             {/* Section Management */}
             <SectionEditor
               sections={sections}
-              onUpdate={setSections}
+              onUpdate={updateSections}
               onEditSection={handleEditSection}
             />
 
@@ -274,7 +327,7 @@ export const TemplateBuilder: React.FC = () => {
                     type="text"
                     value={builderState.personalInfo.name}
                     onChange={(e) =>
-                      setBuilderState({
+                      updateBuilderState({
                         ...builderState,
                         personalInfo: { ...builderState.personalInfo, name: e.target.value }
                       })
@@ -288,7 +341,7 @@ export const TemplateBuilder: React.FC = () => {
                     type="text"
                     value={builderState.personalInfo.title}
                     onChange={(e) =>
-                      setBuilderState({
+                      updateBuilderState({
                         ...builderState,
                         personalInfo: { ...builderState.personalInfo, title: e.target.value }
                       })
@@ -302,7 +355,7 @@ export const TemplateBuilder: React.FC = () => {
                     type="email"
                     value={builderState.personalInfo.email}
                     onChange={(e) =>
-                      setBuilderState({
+                      updateBuilderState({
                         ...builderState,
                         personalInfo: { ...builderState.personalInfo, email: e.target.value }
                       })
@@ -331,7 +384,7 @@ export const TemplateBuilder: React.FC = () => {
                         onChange={(e) => {
                           const newSocialLinks = [...builderState.personalInfo.socialLinks];
                           newSocialLinks[index].platform = e.target.value;
-                          setBuilderState({
+                          updateBuilderState({
                             ...builderState,
                             personalInfo: {
                               ...builderState.personalInfo,
@@ -354,7 +407,7 @@ export const TemplateBuilder: React.FC = () => {
                           const newSocialLinks = [...builderState.personalInfo.socialLinks];
                           newSocialLinks[index].url = e.target.value;
                           newSocialLinks[index].url = formatSocialUrl(link.platform, e.target.value);
-                          setBuilderState({
+                          updateBuilderState({
                             ...builderState,
                             personalInfo: {
                               ...builderState.personalInfo,
